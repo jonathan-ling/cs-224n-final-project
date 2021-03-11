@@ -1,0 +1,26 @@
+[[source]]
+name = "pypi"
+url = "https://pypi.org/simple"
+verify_ssl = true
+
+[scripts]
+lint = "python3 -m pylint --output-format=colorized src -v"
+lintfix = "python3 -m autopep8 -r src -v -aa -i"
+
+[dev-packages]
+pylint = "*"
+black = "*"
+autopep8 = "*"
+
+[packages]
+tqdm = "~=4.41.0"
+nltk = "~=3.4.5"
+wikipedia = "~=1.4.0"
+allennlp = "~=0.9.0"
+numpy = "~=1.18.0"
+transformers = "~=2.3.0"
+prettytable = "~=0.7.2"
+fever-scorer = "~=2.0.39"
+
+[requires]
+python_version = "3"
