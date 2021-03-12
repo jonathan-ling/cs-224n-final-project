@@ -13,6 +13,7 @@ import numpy as np
 from tqdm import tqdm
 
 from common.fever_doc_db import FeverDocDB
+from textaugment import Translate
 
 ########################################################################
 
@@ -92,13 +93,26 @@ def get_synonyms(word):
 
 ########################################################################
 
+# Backtranslation
+
+# Initialize objects for Translate
+t = Translate(src="en", to="de")
+t2 = Translate(src="de", to="en")
+langs = ["fr", "de", "zh-CN", "hi", "ru"]
+langs_dict = {}
+
+for l in langs:
+	langs_dict["en" + l] = Translate(src = "en", to = l)
+	langs_dict[l + "en"] = Translate(src = l, to = "en")
+
 def get_all_sentences(docs, weighted_sentences):
 	for (score, sentence) in weighted_sentences:
 		yield sentence
 
 
-def get_evidence_sentences(docs, evid_sets, replace_synonyms=False):
+def get_evidence_sentences(docs, evid_sets, replace_synonyms=False, backtranslation=False):
 	evidence = set()
+
 	for evid_set in evid_sets:
 		for item in evid_set:
 			Annotation_ID, Evidence_ID, Wikipedia_URL, sentence_ID = item
@@ -108,11 +122,17 @@ def get_evidence_sentences(docs, evid_sets, replace_synonyms=False):
 
 				if replace_synonyms:
 					evidence.add((Wikipedia_URL, sentence_ID+100, replace_synonyms_in_sentence(sent, 3)))
+
+				if backtranslation:
+					for l in langs:
+						evidence.add((Wikipedia_URL, sentence_ID+200, langs_dict[l+"en"].augment(langs_dict["en" + l].augment(sent))))
+
 	return evidence
 
 
-def get_non_evidence_sentences(docs, evid_sets, weighted_sentences, replace_synonyms=False):
+def get_non_evidence_sentences(docs, evid_sets, weighted_sentences, replace_synonyms=False, backtranslation=False):
 	positive_sentences = {}
+
 	for evid_set in evid_sets:
 		for item in evid_set:
 			Annotation_ID, Evidence_ID, Wikipedia_URL, sentence_ID = item
@@ -130,6 +150,10 @@ def get_non_evidence_sentences(docs, evid_sets, weighted_sentences, replace_syno
 
 		if replace_synonyms:
 			yield (page, sent_id+100, replace_synonyms_in_sentence(sent, 3))
+		
+		if backtranslation:
+			for l in langs:
+				yield (page, sent_id+200, langs_dict[l+"en"].augment(langs_dict["en" + l].augment(sent))))
 
 def fetch_documents(db, evid_sets):
 	pages = set()
@@ -145,7 +169,7 @@ def fetch_documents(db, evid_sets):
 	return docs
 
 
-def main(db_file, in_file, out_file, prediction=None, replace_synonyms=False):
+def main(db_file, in_file, out_file, prediction=None, replace_synonyms=False, backtranslation=False):
 	path = os.getcwd()
 	outfile = open(os.path.join(path, out_file), "w+")
 
@@ -170,9 +194,9 @@ def main(db_file, in_file, out_file, prediction=None, replace_synonyms=False):
 			else:
 				label = line["label"]
 				# write positive and negative evidence to file
-				for page, sent_id, sentence in get_evidence_sentences(docs, evid_sets, replace_synonyms):
+				for page, sent_id, sentence in get_evidence_sentences(docs, evid_sets, replace_synonyms, backtranslation):
 					outfile.write("\t".join([str(id), claim, page, str(sent_id), sentence, label[0]]) + "\n")
-				for page, sent_id, sentence in get_non_evidence_sentences(docs, evid_sets, weighted_sentences, replace_synonyms):
+				for page, sent_id, sentence in get_non_evidence_sentences(docs, evid_sets, weighted_sentences, replace_synonyms, backtranslation):
 					outfile.write("\t".join([str(id), claim, page, str(sent_id), sentence, "NOT ENOUGH INFO"[0]]) + "\n")
 	outfile.close()
 
@@ -188,5 +212,7 @@ if __name__ == "__main__":
 						help="when set it generate all the sentences of the predicted documents")
 	parser.add_argument("--replace-synonyms", action='store_true',
 						help="augment golden dataset with synonym replacement")
+	parser.add_argument("--backtranslation", action='store_true',
+						help="augment golden dataset with backtranslation")
 	args = parser.parse_args()
-	main(args.db_file, args.in_file, args.out_file, prediction=args.prediction, replace_synonyms=args.replace_synonyms)
+	main(args.db_file, args.in_file, args.out_file, prediction=args.prediction, replace_synonyms=args.replace_synonyms, backtranslation=args.backtranslation)
