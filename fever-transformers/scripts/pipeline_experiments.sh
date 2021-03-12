@@ -526,6 +526,49 @@ function replace_synonyms() {
 }
 
 
+# Add backtranslation
+function backtranslation() {
+  local fever_path=$1
+  local pipeline_path=$2
+  local cache_path=$3
+  local force=$4
+
+  local doc_ret_path="$pipeline_path/document-retrieval"
+  local sent_ret_path="$pipeline_path/sentence-retrieval"
+  local claim_ver_path="$pipeline_path/claim-verification"
+  local db_path="$pipeline_path/build-db"
+  local dataset_path="$fever_path/dataset"
+
+  local transformers_cache_path="$cache_path/transformers"
+
+  local model_path="$claim_ver_path/model"
+  local db_file="$db_path/wikipedia.db"
+
+  if (( $force != 0 )); then
+    rm -rf "$claim_ver_path"
+  fi
+
+  if [ ! -d "$claim_ver_path" ]; then
+    mkdir -p "$claim_ver_path"
+  fi
+
+  #if [ ! -f "$model_path/config.json" ]; then
+    local tuning_file="$claim_ver_path/claims.golden.train.tsv"
+    local sent_ret_file="$sent_ret_path/sentences.predicted.train.jsonl"
+
+    if [ ! -f "$tuning_file" ]; then
+      echo "● Generating tuning examples (with backtranslation) from claims in $sent_ret_file..."
+      env "PYTHONPATH=src" \
+      pipenv run python3 'src/pipeline/claim-verification/generate_experiments.py' \
+          --db-file "$db_file" \
+          --in-file "$sent_ret_file" \
+          --out-file "$tuning_file" \
+          --backtranslation
+    fi
+  #fi
+}
+
+
 # Run the pipeline
 function run() {
   # Read all the recognized flags and expected arguments.
@@ -590,6 +633,10 @@ function run() {
   if [[ $parg_task == "replace_synonyms" ]]; then
     replace_synonyms "$PATH_D_FEVER" "$PATH_D_PIPELINE" "$PATH_D_CACHE" $flag_force \
     > >(tee -a "$PATH_D_LOGS/replace_synonyms.log") 2>&1
+  fi
+  if [[ $parg_task == "backtranslation" ]]; then
+    backtranslation "$PATH_D_FEVER" "$PATH_D_PIPELINE" "$PATH_D_CACHE" $flag_force \
+    > >(tee -a "$PATH_D_LOGS/backtranslation.log") 2>&1
   fi
 }
 
