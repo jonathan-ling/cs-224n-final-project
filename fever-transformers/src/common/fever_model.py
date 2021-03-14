@@ -55,6 +55,12 @@ from common.fever_processors import fever_output_modes as output_modes
 from common.fever_processors import fever_processors as processors
 from common.fever_processors import fever_convert_examples_to_features as convert_examples_to_features
 
+#############################################################
+# Custom addition to code:
+# Import re library
+import re
+#############################################################
+
 logger = logging.getLogger(__name__)
 
 ALL_MODELS = sum((tuple(conf.pretrained_config_archive_map.keys()) for conf in (BertConfig, XLNetConfig, XLMConfig,
@@ -320,7 +326,16 @@ def predict(args, model, tokenizer):
 
             preds = logits.detach().cpu().numpy()
             if args.output_mode == "classification":
-                preds = np.argmax(preds, axis=1)
+                #############################################################
+                # Custom addition to code:
+                # Write preds for classification if applicable
+                
+                if args.write_preds:
+                    preds = np.concatenate([np.argmax(preds, axis=1).reshape(preds.shape[0],1), preds], axis=1)
+                    preds = re.sub('[\[\] ]','',np.array2string(preds,separator="\t")).split("\n")
+                else:
+                    preds = np.argmax(preds, axis=1)
+                #############################################################
             elif args.output_mode == "regression":
                 preds = np.squeeze(preds, axis=1)
             for pred in preds:
@@ -471,6 +486,13 @@ def main():
                         help="For distributed training: local_rank")
     parser.add_argument("--server_ip", type=str, default="", help="For distant debugging.")
     parser.add_argument("--server_port", type=str, default="", help="For distant debugging.")
+
+    #############################################################
+    # Custom addition to code:
+    #Add write_preds argument to print `preds` in prediction classification
+    parser.add_argument("--write_preds", action="store_true", help="For writing raw preds values in prediction classification.")
+    #############################################################
+
     args = parser.parse_args()
 
     if os.path.exists(args.output_dir) and os.listdir(args.output_dir) and args.do_train and not args.overwrite_output_dir:

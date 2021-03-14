@@ -525,6 +525,183 @@ function backtranslation() {
     fi
   #fi
 }
+
+# Write predictions
+function write_predictions() {
+  local fever_path=$1
+  local pipeline_path=$2
+  local cache_path=$3
+  local force=$4
+  local model_type=$5
+  local model_name=$6
+
+  local doc_ret_path="$pipeline_path/document-retrieval"
+  local sent_ret_path="$pipeline_path/sentence-retrieval"
+  local claim_ver_path="$pipeline_path/claim-verification" # Folder for claim verification files
+  local db_path="$pipeline_path/build-db"
+  local dataset_path="$fever_path/dataset"
+
+  local transformers_cache_path="$cache_path/transformers"
+
+  local model_path="$claim_ver_path/model"
+  local db_file="$db_path/wikipedia.db"
+
+  if (( $force != 0 )); then
+    rm -rf "$claim_ver_path"
+  fi
+
+  if [ ! -d "$claim_ver_path" ]; then
+    mkdir -p "$claim_ver_path"
+  fi
+
+  #if [ ! -f "$model_path/config.json" ]; then
+    local tuning_file="$claim_ver_path/claims.golden.train.tsv"
+    local sent_ret_file="$sent_ret_path/sentences.predicted.train.jsonl"
+  #fi
+
+  #if [ ! -f "$model_path/eval_results.txt" ]; then
+    local eval_file="$claim_ver_path/claims.golden.dev.tsv"
+    local sent_ret_file="$sent_ret_path/sentences.predicted.dev.jsonl"
+  #fi
+
+  for filetype in {dev,test,train}; do
+    local dataset_file="$dataset_path/$filetype.jsonl"
+    local sent_ret_file="$sent_ret_path/sentences.predicted.$filetype.jsonl"
+    local claim_ver_file="$claim_ver_path/claims.predicted.$filetype.jsonl"
+
+    local claim_label_file="$claim_ver_path/claims.labelled.$filetype.tsv" # 'preds' columns added below
+    local claim_file="$claim_ver_path/claims.all.$filetype.tsv"
+    local label_file="$claim_ver_path/claims.label.$filetype.tsv" # 'preds' columns added below
+
+    #if [ ! -f "$claim_ver_file" ]; then
+      #if [ ! -f "$claim_label_file" ]; then
+
+        #if [ ! -f "$label_file" ]; then
+          echo "● Labelling (and writing preds for) claims from retrieved sentences for claims in $claim_file..."
+          env "PYTHONPATH=src" \
+          pipenv run python3 'src/pipeline/claim-verification/model.py' \
+              --model_type "$model_type" \
+              --model_name_or_path "$model_name" \
+              --max_seq_length 128 \
+              --task_name 'claim_verification' \
+              --output_dir "$model_path" \
+              --cache_dir "$transformers_cache_path" \
+              --do_predict \
+              --predict_in_file "$claim_file" \
+              --predict_out_file "$label_file" \
+              --per_gpu_predict_batch_size=32 \
+              --write_preds # Added this flag
+        #fi
+
+        echo "● Combining $claim_file and $label_file in $claim_label_file..."
+        paste -d'\t' "$claim_file" "$label_file" > "$claim_label_file"
+      #fi
+
+    #fi
+  done
+}
+
+# Neural aggregator
+function aggregator() {
+  local fever_path=$1
+  local pipeline_path=$2
+  local cache_path=$3
+  local force=$4
+
+  local doc_ret_path="$pipeline_path/document-retrieval"
+  local sent_ret_path="$pipeline_path/sentence-retrieval"
+  local claim_ver_path="$pipeline_path/claim-verification" # Folder for claim verification files
+  local db_path="$pipeline_path/build-db"
+  local dataset_path="$fever_path/dataset"
+
+  local transformers_cache_path="$cache_path/transformers"
+
+  local model_path="$claim_ver_path/model"
+  local db_file="$db_path/wikipedia.db"
+
+  if (( $force != 0 )); then
+    rm -rf "$claim_ver_path"
+  fi
+
+  if [ ! -d "$claim_ver_path" ]; then
+    mkdir -p "$claim_ver_path"
+  fi
+
+  #if [ ! -f "$model_path/config.json" ]; then
+    local tuning_file="$claim_ver_path/claims.golden.train.tsv"
+    local sent_ret_file="$sent_ret_path/sentences.predicted.train.jsonl"
+  #fi
+
+  #if [ ! -f "$model_path/eval_results.txt" ]; then
+    local eval_file="$claim_ver_path/claims.golden.dev.tsv"
+    local sent_ret_file="$sent_ret_path/sentences.predicted.dev.jsonl"
+  #fi
+
+  local model_file="$claim_ver_path/aggregator.pt" # Where to save the aggregator model after training, and where to retrieve it from
+
+  # Train the model
+  filetype=train
+  local sent_ret_file="$sent_ret_path/sentences.predicted.$filetype.jsonl"
+
+  local claim_label_file="$claim_ver_path/claims.labelled.$filetype.tsv" # 'preds' columns were added
+  local claim_file="$claim_ver_path/claims.all.$filetype.tsv"
+
+  local sent_score_file="$sent_ret_path/sentences.scored.$filetype.tsv" # Sentence scores
+
+  if [ ! -f "$model_file" ]; then
+    echo "● Training neural aggregator..."
+    env "PYTHONPATH=src" \
+    pipenv run python3 'src/pipeline/claim-verification/aggregator.py' \
+        --tuning-file "$tuning_file" \
+        --sent-score-file "$sent_score_file" \
+        --labels-file "$claim_label_file" \
+        --model-file "$model_file" \
+        --do-training
+  fi
+
+  # Deploy the model
+  for filetype in {dev,test,train}; do
+    local dataset_file="$dataset_path/$filetype.jsonl"
+    local sent_ret_file="$sent_ret_path/sentences.predicted.$filetype.jsonl"
+    local claim_ver_file="$claim_ver_path/claims.predicted.$filetype.jsonl" # Aggregator was used
+
+    local claim_label_file="$claim_ver_path/claims.labelled.$filetype.tsv" # 'preds' columns were added
+    local claim_file="$claim_ver_path/claims.all.$filetype.tsv"
+
+    local sent_score_file="$sent_ret_path/sentences.scored.$filetype.tsv" # sentence scores
+
+    #if [ ! -f "$claim_ver_file" ]; then
+      echo "● Verifying each claim in $dataset_file..."
+      env "PYTHONPATH=src" \
+      pipenv run python3 'src/pipeline/claim-verification/aggregator.py' \
+          --tuning-file "$tuning_file" \
+          --sent-score-file "$sent_score_file" \
+          --labels-file "$claim_label_file" \
+          --in-file "$dataset_file" \
+          --out-file "$claim_ver_file" \
+          --model-file "$model_file"
+    #fi
+  done
+
+  local claim_ver_dev_eval_file="$claim_ver_path/eval.dev.txt" # Aggregator was used
+  local claim_ver_dev_file="$claim_ver_path/claims.predicted.train.jsonl" # Aggregator was used
+  echo "● Evaluating predictions in $claim_ver_dev_file as a sanity check (should be high for the training set)..."
+  env "PYTHONPATH=src" \
+  pipenv run python3 'src/pipeline/claim-verification/evaluate.py' \
+      --golden-file "$claim_ver_dev_file" \
+      --prediction-file "$claim_ver_dev_file" \
+  | tee "$claim_ver_dev_eval_file"
+
+  local claim_ver_dev_eval_file="$claim_ver_path/eval.dev.txt" # Aggregator was used
+  local claim_ver_dev_file="$claim_ver_path/claims.predicted.dev.jsonl" # Aggregator was used
+  echo "● Evaluating predictions in $claim_ver_dev_file..."
+  env "PYTHONPATH=src" \
+  pipenv run python3 'src/pipeline/claim-verification/evaluate.py' \
+      --golden-file "$claim_ver_dev_file" \
+      --prediction-file "$claim_ver_dev_file" \
+  | tee "$claim_ver_dev_eval_file"
+}
+
 #############################################################
 
 # Put all the pieces together and generate the file to submit
@@ -642,6 +819,14 @@ function run() {
   if [[ $parg_task == "backtranslation" ]]; then
     backtranslation "$PATH_D_FEVER" "$PATH_D_PIPELINE" "$PATH_D_CACHE" $flag_force \
     > >(tee -a "$PATH_D_LOGS/backtranslation.log") 2>&1
+  fi
+  if [[ $parg_task == "write_predictions" ]]; then
+    write_predictions "$PATH_D_FEVER" "$PATH_D_PIPELINE" "$PATH_D_CACHE" $flag_force "$flag_model_type" "$flag_model_name" \
+    > >(tee -a "$PATH_D_LOGS/write_predictions.log") 2>&1
+  fi
+  if [[ $parg_task == "aggregator" ]]; then
+    aggregator "$PATH_D_FEVER" "$PATH_D_PIPELINE" "$PATH_D_CACHE" $flag_force \
+    > >(tee -a "$PATH_D_LOGS/aggregator.log") 2>&1
   fi
   #############################################################
 }
