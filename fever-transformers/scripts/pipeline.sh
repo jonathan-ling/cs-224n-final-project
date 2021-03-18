@@ -475,7 +475,7 @@ function replace_synonyms() {
     if [ ! -f "$tuning_file" ]; then
       echo "● Generating tuning examples (with synonyms) from claims in $sent_ret_file..."
       env "PYTHONPATH=src" \
-      pipenv run python3 'src/pipeline/claim-verification/generate_experiments.py' \
+      pipenv run python3 'src/pipeline/claim-verification/generate.py' \
           --db-file "$db_file" \
           --in-file "$sent_ret_file" \
           --out-file "$tuning_file" \
@@ -517,7 +517,7 @@ function backtranslation() {
     if [ ! -f "$tuning_file" ]; then
       echo "● Generating tuning examples (with backtranslation) from claims in $sent_ret_file..."
       env "PYTHONPATH=src" \
-      pipenv run python3 'src/pipeline/claim-verification/generate_experiments.py' \
+      pipenv run python3 'src/pipeline/claim-verification/generate.py' \
           --db-file "$db_file" \
           --in-file "$sent_ret_file" \
           --out-file "$tuning_file" \
