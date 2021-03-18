@@ -13,7 +13,6 @@ import numpy as np
 from tqdm import tqdm
 
 from common.fever_doc_db import FeverDocDB
-from textaugment import Translate
 
 #############################################################
 # Custom addition to code:
@@ -49,9 +48,8 @@ stop_words = ['i', 'me', 'my', 'myself', 'we', 'our',
             'very', 's', 't', 'can', 'will', 'just', 'don',
             'should', 'now', '']
 
-#for the first time you use wordnet
 import nltk
-nltk.download('wordnet')
+# nltk.download('wordnet') # for the first time you use wordnet, run this
 from nltk.corpus import wordnet
 
 # Synonym replacement
@@ -93,19 +91,6 @@ def get_synonyms(word):
         synonyms.remove(word)
     return list(synonyms)
 
-
-# Backtranslation
-
-# Initialize Translate objects
-t = Translate(src="en", to="de")
-t2 = Translate(src="de", to="en")
-langs = ["fr", "de", "zh-CN", "hi", "ru"]
-langs_dict = {}
-
-for l in langs:
-    langs_dict["en" + l] = Translate(src = "en", to = l)
-    langs_dict[l + "en"] = Translate(src = l, to = "en")
-
 #############################################################
 
 def get_all_sentences(docs, weighted_sentences):
@@ -113,7 +98,7 @@ def get_all_sentences(docs, weighted_sentences):
         yield sentence
 
 
-def get_evidence_sentences(docs, evid_sets, replace_synonyms=False, backtranslation=False):
+def get_evidence_sentences(docs, evid_sets, replace_synonyms=False):
     evidence = set()
     for evid_set in evid_sets:
         for item in evid_set:
@@ -123,16 +108,11 @@ def get_evidence_sentences(docs, evid_sets, replace_synonyms=False, backtranslat
                 evidence.add((Wikipedia_URL, sentence_ID, sent))
 
                 if replace_synonyms:
-                    evidence.add((Wikipedia_URL, sentence_ID+100, replace_synonyms_in_sentence(sent, 3)))
-
-                if backtranslation:
-                    for l in langs:
-                        evidence.add((Wikipedia_URL, sentence_ID+200, langs_dict[l+"en"].augment(langs_dict["en" + l].augment(sent))))
+                    evidence.add((Wikipedia_URL, sentence_ID+100, replace_synonyms_in_sentence(sent, 3)))  # Add 100 to create a unique sentence ID
 
     return evidence
 
-
-def get_non_evidence_sentences(docs, evid_sets, weighted_sentences, replace_synonyms=False, backtranslation=False):
+def get_non_evidence_sentences(docs, evid_sets, weighted_sentences, replace_synonyms=False):
     positive_sentences = {}
 
     for evid_set in evid_sets:
@@ -151,11 +131,7 @@ def get_non_evidence_sentences(docs, evid_sets, weighted_sentences, replace_syno
         yield sentence
 
         if replace_synonyms:
-            yield (page, sent_id+100, replace_synonyms_in_sentence(sent, 3))
-        
-        if backtranslation:
-            for l in langs:
-                yield (page, sent_id+200, langs_dict[l+"en"].augment(langs_dict["en" + l].augment(sent))))
+            yield (page, sent_id+100, replace_synonyms_in_sentence(sent, 3)) # Add 100 to create a unique sentence ID
 
 def fetch_documents(db, evid_sets):
     pages = set()
@@ -196,11 +172,51 @@ def main(db_file, in_file, out_file, prediction=None, replace_synonyms=False, ba
             else:
                 label = line["label"]
                 # write positive and negative evidence to file
-                for page, sent_id, sentence in get_evidence_sentences(docs, evid_sets, replace_synonyms, backtranslation):
+                for page, sent_id, sentence in get_evidence_sentences(docs, evid_sets, replace_synonyms):
                     outfile.write("\t".join([str(id), claim, page, str(sent_id), sentence, label[0]]) + "\n")
-                for page, sent_id, sentence in get_non_evidence_sentences(docs, evid_sets, weighted_sentences, replace_synonyms, backtranslation):
+                for page, sent_id, sentence in get_non_evidence_sentences(docs, evid_sets, weighted_sentences, replace_synonyms):
                     outfile.write("\t".join([str(id), claim, page, str(sent_id), sentence, "NOT ENOUGH INFO"[0]]) + "\n")
     outfile.close()
+
+    #############################################################
+    # Backtranslation
+
+    if backtranslation:
+  
+        from textaugment import Translate
+        import pandas
+        import time
+
+        # from IPython.display import display, clear_output  # uncomment if running this in a Jupyter notebook
+
+        df_golden = pd.read_csv(outfile, sep="\t", names=['claim_id', 'claim', 'page', 'sent_id', 'sent', 'label'])
+        langs = ["fr", "de", "ja", "hi", "ru"]
+
+        # DO NOT execute this statement more than once, as it will clear all the data from df_new
+        df_new = df_golden.head(0)
+
+        # Run this code chunk any time the API calls stop
+        num_rows_to_translate = 15600 # this number can be set arbitrarily high. Right now, it's about 2% of the total sentences
+        start_index = 0 # index of row to start translating
+        start_row = len(df_new) if len(df_new) > 0 else start_index # row to continue translating from if API calls stop
+        source = df_golden.tail(len(df_golden)-start_row)
+        for idx,row in source.iterrows():
+            if idx >= num_rows_to_translate:
+                break
+            new_row = row
+            lang_idx = np.random.randint(0,5)
+            new_row['sent_id'] += 1000 + lang_idx * 100
+            new_row['sent'] = Translate(src="en", to=langs[lang_idx]).augment(row['sent'])
+            df_new = df_new.append(r)
+            # display(df_new) # uncomment if running this in a Jupyter notebook
+            time.sleep(2)
+            # clear_output(wait=True) # uncomment if running this in a Jupyter notebook
+
+        # Write to file
+        df_output = pd.concat([df_golden, df_new[0:num_rows_to_translate]], axis=0).reset_index()
+        df_output.to_csv(outfile,sep='\t',index=False, header=False)
+
+    #############################################################
 
 
 if __name__ == "__main__":
